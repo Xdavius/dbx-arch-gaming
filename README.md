@@ -8,7 +8,7 @@ Le projet fournit une TUI simple autour de `distrobox` pour creer une box Arch, 
 
 - `bash`
 - `distrobox`
-- `podman`
+- `podman` ou `docker`
 - un utilisateur non-root
 
 Le script refuse d'etre lance en root. Les commandes privilegiees sont executees avec `sudo` uniquement a l'interieur de la box.
@@ -40,6 +40,7 @@ Variables supportees :
 ```bash
 BOX_NAME=arch-gaming
 IMAGE=docker.io/library/archlinux:latest
+CONTAINER_MANAGER=podman
 GPU_VENDOR=nvidia
 BOX_HOME="$HOME/.distrobox/arch-gaming"
 ```
@@ -49,6 +50,13 @@ Exemple :
 ```bash
 GPU_VENDOR=amd BOX_NAME=arch-gaming ./dbx-gaming-deploy
 ```
+
+Valeurs possibles pour `CONTAINER_MANAGER` :
+
+- `podman`
+- `docker`
+
+Si `CONTAINER_MANAGER` n'est pas defini, le script detecte automatiquement `podman`, puis `docker`. Le choix est transmis a Distrobox avec `DBX_CONTAINER_MANAGER`.
 
 Valeurs possibles pour `GPU_VENDOR` :
 

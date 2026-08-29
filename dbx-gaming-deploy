@@ -9,6 +9,7 @@ BOX_NAME="${BOX_NAME:-$DEFAULT_BOX_NAME}"
 IMAGE="${IMAGE:-$DEFAULT_IMAGE}"
 USE_NVIDIA="${USE_NVIDIA:-}"
 GPU_VENDOR="${GPU_VENDOR:-}"
+CONTAINER_MANAGER="${CONTAINER_MANAGER:-${DBX_CONTAINER_MANAGER:-}}"
 DEBUG="${DEBUG:-n}"
 BOX_HOME="${BOX_HOME:-}"
 
@@ -134,6 +135,7 @@ Options:
 Variables:
   BOX_NAME             Nom de la distrobox (defaut: $DEFAULT_BOX_NAME)
   IMAGE                Image utilisee (defaut: $DEFAULT_IMAGE)
+  CONTAINER_MANAGER    podman ou docker
   GPU_VENDOR           nvidia, amd, intel ou none
   USE_NVIDIA           y/n pour activer NVIDIA, conserve pour compatibilite
   BOX_HOME             Home dedie de la box (defaut: \$HOME/.distrobox/\$BOX_NAME)
@@ -166,6 +168,42 @@ box_home() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+resolve_container_manager() {
+  case "$CONTAINER_MANAGER" in
+    podman|docker)
+      if command_exists "$CONTAINER_MANAGER"; then
+        export DBX_CONTAINER_MANAGER="$CONTAINER_MANAGER"
+        return 0
+      fi
+
+      if [[ "$DEBUG" == "y" ]]; then
+        warn "Container manager absent sur l'hote: $CONTAINER_MANAGER"
+        export DBX_CONTAINER_MANAGER="$CONTAINER_MANAGER"
+        return 0
+      fi
+
+      die "Container manager manquant: $CONTAINER_MANAGER"
+      ;;
+    "")
+      if command_exists podman; then
+        CONTAINER_MANAGER="podman"
+      elif command_exists docker; then
+        CONTAINER_MANAGER="docker"
+      elif [[ "$DEBUG" == "y" ]]; then
+        CONTAINER_MANAGER="podman"
+        warn "Aucun container manager detecte, dry-run avec: $CONTAINER_MANAGER"
+      else
+        die "Installez podman ou docker pour utiliser distrobox."
+      fi
+
+      export DBX_CONTAINER_MANAGER="$CONTAINER_MANAGER"
+      ;;
+    *)
+      die "CONTAINER_MANAGER invalide: $CONTAINER_MANAGER. Utilisez podman ou docker."
+      ;;
+  esac
 }
 
 require_command() {
@@ -303,6 +341,7 @@ Configuration actuelle
 Box        : $BOX_NAME
 Image      : $IMAGE
 Home       : $(box_home)
+Runtime    : ${CONTAINER_MANAGER:-auto}
 GPU        : $GPU_VENDOR
 NVIDIA     : $USE_NVIDIA
 Debug      : $DEBUG
@@ -320,19 +359,19 @@ confirm_step() {
 check_requirements() {
   info "Verification des prerequis"
   require_command distrobox
-  require_command podman
+  resolve_container_manager
 
   if [[ "$DEBUG" == "y" ]]; then
-    ok "Verification des prerequis simulee"
+    ok "Verification des prerequis simulee avec $CONTAINER_MANAGER"
   else
-    ok "Prerequis disponibles"
+    ok "Prerequis disponibles avec $CONTAINER_MANAGER"
   fi
 }
 
 box_exists() {
   [[ "$DEBUG" == "y" ]] && return 1
 
-  podman container exists "$BOX_NAME"
+  "$CONTAINER_MANAGER" container inspect "$BOX_NAME" >/dev/null 2>&1
 }
 
 create_box() {
@@ -615,6 +654,7 @@ dbx-arch-gaming
 Box    : $BOX_NAME
 Image  : $IMAGE
 Home   : $(box_home)
+Runtime: ${CONTAINER_MANAGER:-auto}
 GPU    : $GPU_VENDOR
 NVIDIA : $USE_NVIDIA
 Debug  : $DEBUG
