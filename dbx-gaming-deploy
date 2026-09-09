@@ -616,7 +616,9 @@ install_gaming_apps() {
 }
 
 export_gaming_apps() {
-  confirm_step "export des applications gaming vers l'hote" || return 0
+  if [[ "${1:-}" != "--confirmed" ]]; then
+    confirm_step "export des applications gaming vers l'hote" || return 0
+  fi
   ensure_box_exists
 
   info "Export des applications: ${EXPORT_APPS[*]}"
@@ -639,7 +641,9 @@ full_deploy() {
   install_vulkan_packages
   install_yay_bin
   install_gaming_apps
-  export_gaming_apps
+  if ask_yes_no "Voulez-vous exporter les applications gaming vers l'hote ?" "y"; then
+    export_gaming_apps --confirmed
+  fi
 }
 
 show_menu() {
