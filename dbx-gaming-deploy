@@ -19,6 +19,8 @@ PACMAN_PACKAGES=(
   curl
   wget
   vim
+  pipewire-pulse
+  pipewire-alsa
 )
 
 NVIDIA_PACKAGES=(
@@ -231,7 +233,7 @@ ask_text() {
   local default="$2"
   local value
 
-  printf '%s [%s]: ' "$prompt" "$default"
+  printf '%s [%s]: ' "$prompt" "$default" >&2
   read -r value
   printf '%s' "${value:-$default}"
 }
@@ -273,20 +275,23 @@ normalize_gpu_vendor() {
 }
 
 detect_gpu_vendor() {
-  command_exists lspci || return 1
+  local pci_devices
 
-  if lspci | grep -Eiq 'VGA|3D|Display'; then
-    if lspci | grep -Eiq '(VGA|3D|Display).*NVIDIA'; then
+  command_exists lspci || return 1
+  pci_devices="$(lspci)" || return 1
+
+  if grep -Eiq 'VGA|3D|Display' <<< "$pci_devices"; then
+    if grep -Eiq '(VGA|3D|Display).*NVIDIA' <<< "$pci_devices"; then
       printf 'nvidia'
       return 0
     fi
 
-    if lspci | grep -Eiq '(VGA|3D|Display).*(AMD|ATI|Radeon)'; then
+    if grep -Eiq '(VGA|3D|Display).*(AMD|ATI|Radeon)' <<< "$pci_devices"; then
       printf 'amd'
       return 0
     fi
 
-    if lspci | grep -Eiq '(VGA|3D|Display).*Intel'; then
+    if grep -Eiq '(VGA|3D|Display).*Intel' <<< "$pci_devices"; then
       printf 'intel'
       return 0
     fi
@@ -334,25 +339,39 @@ configure_project() {
 }
 
 print_summary() {
-  cat <<EOF
+  printf '\n%sConfiguration actuelle%s\n' "$COLOR_BOLD" "$COLOR_RESET"
+  print_config_row "Box" "$BOX_NAME"
+  print_config_row "Image" "$IMAGE"
+  print_config_row "Home" "$(box_home)"
+  print_config_row "Runtime" "${CONTAINER_MANAGER:-auto}"
+  case "$GPU_VENDOR" in
+    amd) print_config_row "GPU" "AMD" "$COLOR_RED" ;;
+    nvidia) print_config_row "GPU" "NVIDIA" "$COLOR_GREEN" ;;
+    intel) print_config_row "GPU" "INTEL" "$COLOR_BLUE" ;;
+    *) print_config_row "GPU" "Aucun" "$COLOR_YELLOW" ;;
+  esac
+  if [[ "$DEBUG" == "y" ]]; then
+    print_config_row "Debug" "Activé" "$COLOR_YELLOW"
+  else
+    print_config_row "Debug" "Désactivé"
+  fi
+  printf '\n'
+}
 
-Configuration actuelle
----------------------
-Box        : $BOX_NAME
-Image      : $IMAGE
-Home       : $(box_home)
-Runtime    : ${CONTAINER_MANAGER:-auto}
-GPU        : $GPU_VENDOR
-NVIDIA     : $USE_NVIDIA
-Debug      : $DEBUG
+print_config_row() {
+  printf '  %-8s %s%s%s\n' "$1" "${3:-$COLOR_BLUE}" "$2" "$COLOR_RESET"
+}
 
-EOF
+print_menu_item() {
+  printf '  %s%2s.%s %s\n' "$COLOR_BLUE" "$1" "$COLOR_RESET" "$2"
 }
 
 confirm_step() {
   local label="$1"
 
-  print_summary
+  if [[ "${full_deploy_active:-n}" != "y" ]]; then
+    print_summary
+  fi
   ask_yes_no "Executer: $label ?" "y"
 }
 
@@ -393,6 +412,9 @@ create_box() {
     --name "$BOX_NAME"
     --image "$IMAGE"
     --home "$home_dir"
+    # Avoid desktop-entry generation using docker cp on an unstarted box.
+    # Gaming applications are exported separately after installation.
+    --no-entry
   )
 
   if [[ "$USE_NVIDIA" == "y" ]]; then
@@ -634,7 +656,38 @@ export_gaming_apps() {
 }
 
 full_deploy() {
-  create_box
+  local full_deploy_active="y"
+  local choice
+  local recreate="y"
+
+  print_summary
+  check_requirements
+  if box_exists; then
+    info "La box existe deja: $BOX_NAME"
+    printf '\n'
+    print_menu_item 1 "Reprendre l'installation"
+    print_menu_item 2 "Supprimer et recreer la box (home conserve)"
+    print_menu_item 0 "Annuler"
+    while true; do
+      printf '\n%sChoix :%s ' "$COLOR_BOLD" "$COLOR_RESET"
+      read -r choice || return 0
+      case "$choice" in
+        1) recreate="n"; break ;;
+        2)
+          run_host env DBX_CONTAINER_RM_CUSTOM_HOME=0 distrobox rm --force "$BOX_NAME"
+          break
+          ;;
+        0) return 0 ;;
+        *) warn "Choix invalide. Utilisez 1, 2 ou 0." ;;
+      esac
+    done
+  else
+    confirm_step "deploiement complet" || return 0
+  fi
+
+  if [[ "$recreate" == "y" ]]; then
+    create_box
+  fi
   configure_pacman
   install_base_devel
   tune_makepkg
@@ -651,31 +704,26 @@ show_menu() {
     clear
   fi
 
-  cat <<EOF
-dbx-arch-gaming
-===============
+  printf '\n%s%sdbx-arch-gaming%s\n' "$COLOR_BOLD" "$COLOR_BLUE" "$COLOR_RESET"
+  print_summary
 
-Box    : $BOX_NAME
-Image  : $IMAGE
-Home   : $(box_home)
-Runtime: ${CONTAINER_MANAGER:-auto}
-GPU    : $GPU_VENDOR
-NVIDIA : $USE_NVIDIA
-Debug  : $DEBUG
+  printf '%sPreparation%s\n' "$COLOR_BOLD" "$COLOR_RESET"
+  print_menu_item 1 "Configurer"
+  print_menu_item 2 "Creer la box"
+  print_menu_item 3 "Modifier pacman.conf"
+  print_menu_item 4 "Installer base-devel"
+  print_menu_item 5 "Modifier makepkg.conf"
 
-1. Configurer
-2. Creer la box
-3. Modifier pacman.conf
-4. Installer base-devel
-5. Modifier makepkg.conf
-6. Installer Vulkan GPU
-7. Installer yay-bin
-8. Installer les apps gaming
-9. Exporter les apps gaming
-10. Deploiement complet
-0. Quitter
+  printf '\n%sGaming%s\n' "$COLOR_BOLD" "$COLOR_RESET"
+  print_menu_item 6 "Installer Vulkan GPU"
+  print_menu_item 7 "Installer yay-bin"
+  print_menu_item 8 "Installer les apps gaming"
+  print_menu_item 9 "Exporter les apps gaming"
 
-EOF
+  printf '\n'
+  print_menu_item 10 "${COLOR_BOLD}${COLOR_GREEN}Deploiement complet${COLOR_RESET}"
+  print_menu_item 0 "Quitter"
+  printf '\n'
 }
 
 main_menu() {
@@ -683,7 +731,7 @@ main_menu() {
 
   while true; do
     show_menu
-    printf 'Choix: '
+    printf '%sChoix :%s ' "$COLOR_BOLD" "$COLOR_RESET"
     read -r choice
 
     case "$choice" in
@@ -722,18 +770,19 @@ parse_args() {
 }
 
 main() {
+  parse_args "$@"
+  refuse_root
+
   GPU_VENDOR="$(normalize_gpu_vendor "${GPU_VENDOR:-}")"
   if [[ "$GPU_VENDOR" == "" ]]; then
     if [[ "${USE_NVIDIA:-n}" == "y" ]]; then
       GPU_VENDOR="nvidia"
     else
-      GPU_VENDOR="none"
+      GPU_VENDOR="$(detect_gpu_vendor)" || GPU_VENDOR="none"
     fi
   fi
   sync_nvidia_flag
 
-  parse_args "$@"
-  refuse_root
   main_menu
 }
 
